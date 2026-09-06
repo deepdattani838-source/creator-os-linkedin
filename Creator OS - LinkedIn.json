@@ -1,0 +1,772 @@
+{
+  "name": "Creator OS - LinkedIn",
+  "nodes": [
+    {
+      "parameters": {
+        "formTitle": "Creator OS - New post from an article",
+        "formDescription": "Paste the article or screenshot content, then your reaction and which question you want to end on.",
+        "formFields": {
+          "values": [
+            {
+              "fieldLabel": "Article or screenshot content",
+              "fieldType": "textarea",
+              "fieldName": "article_text",
+              "requiredField": true
+            },
+            {
+              "fieldLabel": "Your reaction (the angle, and which question to end on)",
+              "fieldType": "textarea",
+              "fieldName": "creator_reaction",
+              "requiredField": true
+            },
+            {
+              "fieldLabel": "Channel",
+              "fieldName": "channel",
+              "defaultValue": "LinkedIn"
+            }
+          ]
+        },
+        "options": {
+          "appendAttribution": false,
+          "respondWithOptions": {
+            "values": {
+              "formSubmittedText": "Draft is being generated. Check the dashboard in about thirty seconds."
+            }
+          }
+        }
+      },
+      "id": "dd64d4ce-bb14-497f-9c91-597bfac3e35b",
+      "name": "New Article Reaction",
+      "type": "n8n-nodes-base.formTrigger",
+      "typeVersion": 2.6,
+      "position": [
+        0,
+        0
+      ],
+      "webhookId": "9ca37609-5eac-467c-a3a1-7864de5b4db0"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "1",
+              "name": "source_id",
+              "value": "={{ $now.toMillis() }}",
+              "type": "string"
+            },
+            {
+              "id": "2",
+              "name": "article_text",
+              "value": "={{ $json.article_text }}",
+              "type": "string"
+            },
+            {
+              "id": "3",
+              "name": "creator_reaction",
+              "value": "={{ $json.creator_reaction }}",
+              "type": "string"
+            },
+            {
+              "id": "4",
+              "name": "channel",
+              "value": "={{ $json.channel }}",
+              "type": "string"
+            },
+            {
+              "id": "5",
+              "name": "submitted_at",
+              "value": "={{ $now.toISO() }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "568a59e7-7829-4638-9391-1f90e0f5b2e4",
+      "name": "Prepare Submission",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.5,
+      "position": [
+        224,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "modelId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "claude-sonnet-5"
+        },
+        "messages": {
+          "values": [
+            {
+              "content": "=Source material:\n{{ $json.article_text }}"
+            }
+          ]
+        },
+        "options": {
+          "system": "You extract distinct claims or ideas from source material for a content drafting pipeline. For each claim, identify the exact source span, a short quote or line, it came from. Respond with a JSON object containing a claims array; each entry has a text field and a source_span field. Return only JSON, no prose, no markdown code fences.",
+          "maxTokens": 1500
+        }
+      },
+      "id": "bb06dfe0-c9ce-4948-b047-a06cb3b04449",
+      "name": "Extract And Trace Claims",
+      "type": "@n8n/n8n-nodes-langchain.anthropic",
+      "typeVersion": 1,
+      "position": [
+        448,
+        0
+      ],
+      "credentials": {
+        "anthropicApi": {
+          "id": null,
+          "name": "Gateway credits",
+          "__aiGatewayManaged": true
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "var item = $input.first().json;\nvar raw = \"\";\nif (typeof item.content === \"string\") { raw = item.content; }\nelse if (Array.isArray(item.content)) { var t = item.content.find(function(p){ return p && p.type === \"text\"; }); raw = t ? t.text : JSON.stringify(item.content); }\nelse if (typeof item.text === \"string\") { raw = item.text; }\nelse if (typeof item.output === \"string\") { raw = item.output; }\nelse { raw = JSON.stringify(item); }\nraw = raw.trim().replace(/^```json/i, \"\").replace(/^```/, \"\").replace(/```$/, \"\").trim();\nvar parsed;\ntry { parsed = JSON.parse(raw); } catch (e) { parsed = { claims: [] }; }\nvar submission = $(\"Prepare Submission\").first().json;\nvar out = Object.assign({}, submission, { claims: parsed.claims || [] });\nreturn [{ json: out }];"
+      },
+      "id": "f6688347-06c6-47a0-b50f-d8f51ea704bc",
+      "name": "Parse Claims And Merge Context",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        672,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "modelId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "claude-sonnet-5"
+        },
+        "messages": {
+          "values": [
+            {
+              "content": "=Claims to check:\n{{ JSON.stringify($json.claims) }}"
+            }
+          ]
+        },
+        "options": {
+          "system": "You check claims against a creator archive and voice profile. Flag any claim that repeats a topic, company, or specific fact from a past post, not phrases the creator repeats on purpose. Also score how well a draft made from these claims would fit the creator voice, from zero to one hundred. Voice profile - structural template observed across this creator's LinkedIn posts: (1) an opening paragraph stating the news with two or three concrete numbers pulled directly from the source, often starting with the phrase A major; (2) a second paragraph explaining why it matters, often opening with By, For [company] this is a strategic move to, or This development is a significant milestone for; (3) a forward-looking, hedged paragraph, often ending with the phrase could serve as a blueprint for; (4) a closing line that is always a direct binary engagement question in the form Do you think A, or B. Tone is third-person analyst register, no first-person opinions stated directly, numbers-heavy, no emojis, no slang. Do not flag the recurring structural phrases above as repetition, since they are intentional voice. Only flag repeated topics or specific claims, such as the same company or the same event, as duplicates. Respond with a JSON object containing a claims array, each with text and repeated_on fields, a voice_score number, and a flags array of short strings. Return only JSON, no prose, no markdown code fences.",
+          "maxTokens": 1000
+        }
+      },
+      "id": "14e097c6-a98d-42bf-9c58-2bbf70a5e8e7",
+      "name": "Archive And Voice Check",
+      "type": "@n8n/n8n-nodes-langchain.anthropic",
+      "typeVersion": 1,
+      "position": [
+        880,
+        0
+      ],
+      "credentials": {
+        "anthropicApi": {
+          "id": null,
+          "name": "Gateway credits",
+          "__aiGatewayManaged": true
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "var item = $input.first().json;\nvar raw = \"\";\nif (typeof item.content === \"string\") { raw = item.content; }\nelse if (Array.isArray(item.content)) { var t = item.content.find(function(p){ return p && p.type === \"text\"; }); raw = t ? t.text : JSON.stringify(item.content); }\nelse if (typeof item.text === \"string\") { raw = item.text; }\nelse if (typeof item.output === \"string\") { raw = item.output; }\nelse { raw = JSON.stringify(item); }\nraw = raw.trim().replace(/^```json/i, \"\").replace(/^```/, \"\").replace(/```$/, \"\").trim();\nvar parsed;\ntry { parsed = JSON.parse(raw); } catch (e) { parsed = {}; }\nvar prior = $(\"Parse Claims And Merge Context\").first().json;\nvar out = Object.assign({}, prior, { claims: parsed.claims || prior.claims, voice_score: parsed.voice_score || 0, flags: parsed.flags || [] });\nreturn [{ json: out }];"
+      },
+      "id": "82346caf-50b8-4fad-aa72-5979822a8c09",
+      "name": "Parse Archive And Voice Check",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1104,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "modelId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "claude-sonnet-5"
+        },
+        "messages": {
+          "values": [
+            {
+              "content": "=Source material:\n{{ $json.article_text }}\n\nCreator angle and question to end on:\n{{ $json.creator_reaction }}\n\nClaims, use only the new non-repeated ones:\n{{ JSON.stringify($json.claims) }}"
+            }
+          ]
+        },
+        "options": {
+          "system": "You write LinkedIn posts for a creator, following their exact four paragraph structure: an opening paragraph stating the news with two or three concrete numbers pulled directly from the source, often starting with the phrase A major; a second paragraph explaining why it matters; a third paragraph that is forward-looking and hedged, often ending with the phrase could serve as a blueprint for; and a closing line that is always a direct binary engagement question in the form Do you think A, or B. Lead the third paragraph and the closing question with the creator chosen angle, do not invent a different one. Use only facts present in the source material. Return only the post text, with no preamble or explanation.",
+          "maxTokens": 1200
+        }
+      },
+      "id": "f209df04-4dd4-4bae-a14e-9a44bc8d6c05",
+      "name": "Draft LinkedIn Post",
+      "type": "@n8n/n8n-nodes-langchain.anthropic",
+      "typeVersion": 1,
+      "position": [
+        1328,
+        0
+      ],
+      "credentials": {
+        "anthropicApi": {
+          "id": null,
+          "name": "Gateway credits",
+          "__aiGatewayManaged": true
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "var item = $input.first().json;\nvar raw = \"\";\nif (typeof item.content === \"string\") { raw = item.content; }\nelse if (Array.isArray(item.content)) { var t = item.content.find(function(p){ return p && p.type === \"text\"; }); raw = t ? t.text : JSON.stringify(item.content); }\nelse if (typeof item.text === \"string\") { raw = item.text; }\nelse if (typeof item.output === \"string\") { raw = item.output; }\nelse { raw = JSON.stringify(item); }\nvar prior = $(\"Parse Archive And Voice Check\").first().json;\nvar out = Object.assign({}, prior, { draft_text: raw.trim() });\nreturn [{ json: out }];"
+      },
+      "id": "c5ada04d-012c-461f-9d7a-550e5f90b420",
+      "name": "Extract Draft Text",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1552,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "dataTableId": {
+          "__rl": true,
+          "mode": "name",
+          "value": "review_queue"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "source_id": "={{ $json.source_id }}",
+            "article_text": "={{ $json.article_text }}",
+            "creator_reaction": "={{ $json.creator_reaction }}",
+            "channel": "={{ $json.channel }}",
+            "claims": "={{ JSON.stringify($json.claims) }}",
+            "voice_score": "={{ $json.voice_score }}",
+            "flags": "={{ JSON.stringify($json.flags) }}",
+            "draft_text": "={{ $json.draft_text }}",
+            "final_text": "",
+            "status": "pending",
+            "submitted_at": "={{ $json.submitted_at }}"
+          },
+          "schema": [
+            {
+              "id": "source_id",
+              "displayName": "source_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "article_text",
+              "displayName": "article_text",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "creator_reaction",
+              "displayName": "creator_reaction",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "channel",
+              "displayName": "channel",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "claims",
+              "displayName": "claims",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "voice_score",
+              "displayName": "voice_score",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "flags",
+              "displayName": "flags",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "draft_text",
+              "displayName": "draft_text",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "final_text",
+              "displayName": "final_text",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "status",
+              "displayName": "status",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "submitted_at",
+              "displayName": "submitted_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "409388e8-3c11-47fd-8196-9fd8ef6f97b8",
+      "name": "Save To Review Queue",
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [
+        1760,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "path": "creator-os",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "8c196ded-2f5d-4634-9abb-25d07923cf77",
+      "name": "GET Dashboard",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        0,
+        304
+      ],
+      "webhookId": "c6914064-8c08-4328-b2fa-08f7fe7054b6"
+    },
+    {
+      "parameters": {
+        "operation": "get",
+        "dataTableId": {
+          "__rl": true,
+          "mode": "name",
+          "value": "review_queue"
+        },
+        "returnAll": true,
+        "orderBy": true
+      },
+      "id": "67965eed-0e7a-4d06-afc5-85ff5ca8063c",
+      "name": "Fetch All Reviews",
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [
+        224,
+        304
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "var rows = $input.all().map(function(i){ return i.json; });\nvar encoded = Buffer.from(JSON.stringify(rows)).toString(\"base64\");\nvar html = \"<!DOCTYPE html>\\n<html lang=\\\"en\\\">\\n<head>\\n<meta charset=\\\"UTF-8\\\">\\n<meta name=\\\"viewport\\\" content=\\\"width=device-width, initial-scale=1.0\\\">\\n<title>Creator OS - Review Queue</title>\\n<script src=\\\"https://cdn.tailwindcss.com\\\"></script>\\n<script defer src=\\\"https://cdn.jsdelivr.net/npm/alpinejs@3/dist/cdn.min.js\\\"></script>\\n</head>\\n<body class=\\\"bg-gray-50 min-h-screen p-6\\\">\\n<h1 class=\\\"text-2xl font-bold mb-1\\\">Creator OS - Review Queue</h1>\\n<p class=\\\"text-gray-500 mb-6\\\">Accept, edit, or reject each draft. Every decision is logged.</p>\\n<div x-data=\\\"app()\\\" class=\\\"space-y-4 max-w-3xl\\\">\\n  <template x-for=\\\"row in rows\\\" :key=\\\"row.source_id\\\">\\n    <div class=\\\"bg-white rounded-lg shadow p-5\\\">\\n      <div class=\\\"flex justify-between items-center mb-2\\\">\\n        <span class=\\\"text-xs uppercase tracking-wide font-semibold\\\"\\n              :class=\\\"row.status === 'pending' ? 'text-amber-600' : (row.status === 'rejected' ? 'text-red-600' : 'text-green-600')\\\"\\n              x-text=\\\"row.status\\\"></span>\\n        <span class=\\\"text-xs text-gray-400\\\" x-text=\\\"row.channel + ' - ' + row.submitted_at\\\"></span>\\n      </div>\\n      <p class=\\\"text-xs text-gray-400 mb-1\\\">Voice score: <span x-text=\\\"row.voice_score\\\"></span></p>\\n      <textarea x-model=\\\"row._edit\\\" class=\\\"w-full border rounded p-2 text-sm mb-3\\\" rows=\\\"6\\\"></textarea>\\n      <div class=\\\"flex gap-2\\\" x-show=\\\"row.status === 'pending'\\\">\\n        <button @click=\\\"decide(row, 'accepted')\\\" class=\\\"bg-green-600 text-white px-3 py-1.5 rounded text-sm\\\">Accept</button>\\n        <button @click=\\\"decide(row, 'edited')\\\" class=\\\"bg-blue-600 text-white px-3 py-1.5 rounded text-sm\\\">Save as edited</button>\\n        <button @click=\\\"decide(row, 'rejected')\\\" class=\\\"bg-red-600 text-white px-3 py-1.5 rounded text-sm\\\">Reject</button>\\n      </div>\\n    </div>\\n  </template>\\n  <p x-show=\\\"rows.length === 0\\\" class=\\\"text-gray-400\\\">No drafts yet - submit one from the intake form.</p>\\n</div>\\n<script id=\\\"__data\\\" type=\\\"application/json\\\">__DATA_PLACEHOLDER__</script>\\n<script>\\nfunction app() {\\n  return {\\n    rows: JSON.parse(atob(document.getElementById('__data').textContent)).map(function(r) {\\n      r._edit = r.draft_text;\\n      return r;\\n    }),\\n    async decide(row, decision) {\\n      const base = window.location.pathname.replace(/\\\\/$/, '');\\n      const url = base + '/decide';\\n      await fetch(url, {\\n        method: 'POST',\\n        headers: { 'Content-Type': 'application/json' },\\n        body: JSON.stringify({ source_id: row.source_id, decision: decision, final_text: row._edit })\\n      });\\n      row.status = decision;\\n    }\\n  };\\n}\\n</script>\\n</body>\\n</html>\".replace(\"__DATA_PLACEHOLDER__\", encoded);\nreturn [{ json: { html: html } }];"
+      },
+      "id": "f42ba8bd-79c3-43e1-b3bf-c67eefcfaf2e",
+      "name": "Build Dashboard Html",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        448,
+        304
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "text",
+        "responseBody": "={{ $json.html }}",
+        "options": {
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "Content-Type",
+                "value": "text/html; charset=utf-8"
+              }
+            ]
+          }
+        }
+      },
+      "id": "15356ede-d9ea-4b2b-9501-575cab970110",
+      "name": "Respond Dashboard Html",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        672,
+        304
+      ]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "creator-os/decide",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "123fac93-d4f0-4522-8648-fa349016edae",
+      "name": "POST Decide",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        0,
+        608
+      ],
+      "webhookId": "ddd030b7-4b76-4dfe-816d-7c4efde045de"
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "dataTableId": {
+          "__rl": true,
+          "mode": "name",
+          "value": "review_queue"
+        },
+        "matchType": "allConditions",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "source_id",
+              "keyValue": "={{ $json.body.source_id }}"
+            }
+          ]
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "status": "={{ $json.body.decision }}",
+            "final_text": "={{ $json.body.final_text }}"
+          },
+          "schema": [
+            {
+              "id": "status",
+              "displayName": "status",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "final_text",
+              "displayName": "final_text",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "662028a8-488c-417e-a9cf-b1c949514191",
+      "name": "Update Review Status",
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [
+        224,
+        608
+      ]
+    },
+    {
+      "parameters": {
+        "dataTableId": {
+          "__rl": true,
+          "mode": "name",
+          "value": "run_log"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "source_id": "={{ $('POST Decide').item.json.body.source_id }}",
+            "decision": "={{ $('POST Decide').item.json.body.decision }}",
+            "decided_at": "={{ $now.toISO() }}",
+            "notes": ""
+          },
+          "schema": [
+            {
+              "id": "source_id",
+              "displayName": "source_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "decision",
+              "displayName": "decision",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "decided_at",
+              "displayName": "decided_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "notes",
+              "displayName": "notes",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "7f6e025d-f085-4168-89a8-bdef692ccded",
+      "name": "Append Run Log",
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [
+        448,
+        608
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "text",
+        "responseBody": "OK",
+        "options": {}
+      },
+      "id": "b410984b-7922-4219-bf6b-a0e824f513c9",
+      "name": "Respond Decide Ok",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        672,
+        608
+      ]
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "New Article Reaction": {
+      "main": [
+        [
+          {
+            "node": "Prepare Submission",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Submission": {
+      "main": [
+        [
+          {
+            "node": "Extract And Trace Claims",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract And Trace Claims": {
+      "main": [
+        [
+          {
+            "node": "Parse Claims And Merge Context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Claims And Merge Context": {
+      "main": [
+        [
+          {
+            "node": "Archive And Voice Check",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Archive And Voice Check": {
+      "main": [
+        [
+          {
+            "node": "Parse Archive And Voice Check",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Archive And Voice Check": {
+      "main": [
+        [
+          {
+            "node": "Draft LinkedIn Post",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Draft LinkedIn Post": {
+      "main": [
+        [
+          {
+            "node": "Extract Draft Text",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Draft Text": {
+      "main": [
+        [
+          {
+            "node": "Save To Review Queue",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "GET Dashboard": {
+      "main": [
+        [
+          {
+            "node": "Fetch All Reviews",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch All Reviews": {
+      "main": [
+        [
+          {
+            "node": "Build Dashboard Html",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Dashboard Html": {
+      "main": [
+        [
+          {
+            "node": "Respond Dashboard Html",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "POST Decide": {
+      "main": [
+        [
+          {
+            "node": "Update Review Status",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update Review Status": {
+      "main": [
+        [
+          {
+            "node": "Append Run Log",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Append Run Log": {
+      "main": [
+        [
+          {
+            "node": "Respond Decide Ok",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": true
+  },
+  "versionId": "792a67db-1daa-4044-b87d-ccf91f286dd6",
+  "meta": {
+    "aiBuilderAssisted": true,
+    "builderVariant": "mcp",
+    "instanceId": "7c18bb489cee47ee36ea72e9a2c95f6c1b2e96b234e07f2f861c9b5ad68ff1d2"
+  },
+  "nodeGroups": [],
+  "id": "GrY9WlUEnFXJdxgS",
+  "tags": []
+}
